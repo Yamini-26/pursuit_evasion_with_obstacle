@@ -7,11 +7,12 @@ from phase_2 import Phase2Solver
 class Phase1Solver:
     "Solution for Phase 1 (above obstacle) - Approach to obstacle"
     
-    def __init__(self, geometry: GameGeometry, vA: float, vD: float):
+    def __init__(self, geometry: GameGeometry, vA: float, vD: float, T_max: float):
         self.geo = geometry
         self.vA = vA
         self.vD = vD
-        self.phase2 = Phase2Solver(geometry, vA, vD)
+        self.T_max = T_max
+        self.phase2 = Phase2Solver(geometry, vA, vD, T_max)
         
         # Obstacle parameters
         self.obs_radius = geometry.obstacle_radius
@@ -57,7 +58,7 @@ class Phase1Solver:
         V = expected payoff with optimal play
         """
         # Step 1: Get attacker's reachable x at obstacle
-        xA_min, xA_max, t_A = self.attacker_reachable_x_at_obstacle(xA, yA)
+        xA_min, xA_max, t_A_vertical = self.attacker_reachable_x_at_obstacle(xA, yA)
         
         # Step 2: Defender can go anywhere horizontally
         # But they have less time if attacker arrives quickly
@@ -79,7 +80,12 @@ class Phase1Solver:
             t_A_horizontal = dx_A / self.vA
             
             # Total time for attacker to reach interface
-            t_A_total = t_A + t_A_horizontal  # They move diagonally
+            t_A_total = t_A_vertical + t_A_horizontal  # They move diagonally
+
+            # If attacker can't even reach obstacle within T_max, it's a draw
+            if t_A_total > self.T_max:
+                # Game times out before Phase 2 even starts
+                continue  # Skip this candidate - can't reach in time
             
             # Defender's problem: choose xD_interface to maximize (minimize?) payoff
             # Defender wants to minimize attacker's payoff
@@ -127,7 +133,11 @@ class Phase1Solver:
                 best_value = defender_best_value
                 best_xA_interface = xA_interface
                 best_xD_interface = best_xD_for_this_xA
-        
+
+        # If no candidate works (all exceed T_max), it's a draw
+        if best_xA_interface is None:
+            return 0.0, xA, xD  # Draw - can't reach obstacle in time
+            
         return best_value, best_xA_interface, best_xD_interface
     
     def simulate_optimal_paths(self, xA, yA, xD, yD, dt=0.1):
@@ -243,9 +253,10 @@ if __name__ == "__main__":
     
     # Create geometry
     geo = GameGeometry(epsilon=0.5)
+    T_max = 2.15  # Maximum time before draw
     
     # Test with different speed ratios
-    speed_ratios = [0.8, 1.0, 1.2]
+    speed_ratios = [0.3, 0.5, 0.6, 1.2]
     
     for ratio in speed_ratios:
         print(f"\nSpeed Ratio vD/vA = {ratio}")
@@ -253,7 +264,7 @@ if __name__ == "__main__":
         # Create solvers
         vA = 1.0
         vD = vA * ratio
-        phase1 = Phase1Solver(geo, vA, vD)
+        phase1 = Phase1Solver(geo, vA, vD, T_max)
         
         # Starting positions
         xA_start, yA_start = 0.0, 3.0  # Attacker above

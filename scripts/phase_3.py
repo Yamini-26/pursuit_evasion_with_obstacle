@@ -6,10 +6,11 @@ from geometry import GameGeometry
 class Phase3Solver:
     "Solution for Phase 3 (after obstacle) - on the same side heading towards target"
     
-    def __init__(self, geometry: GameGeometry, vA: float, vD: float):
+    def __init__(self, geometry: GameGeometry, vA: float, vD: float, T_max: float):
         self.geo = geometry
         self.vA = vA
         self.vD = vD
+        self.T_max = T_max
     
     def time_to_target(self, xA, yA):
         "Time for attacker to reach target going straight down"
@@ -74,7 +75,7 @@ class Phase3Solver:
     def payoff(self, xA, yA, xD, yD):
         """
         Compute payoff J3(xA, xD) for Phase 3
-        Positive = attacker wins, Negative = defender wins
+        Positive = attacker wins, Negative = defender wins, 0 = draw
         """
         # Ensure Phase 3 (both on same side, attacker below obstacle)
         if yA > -self.geo.obstacle_radius:
@@ -83,17 +84,21 @@ class Phase3Solver:
         # Find if and when capture occurs
         capture_time, capture_distance = self.find_capture_time(xA, yA, xD, yD)
         t_attacker = self.time_to_target(xA, yA)
+
+        # Case 1: Capture happens before target and within time limit
+        if capture_time is not None and capture_time <= self.T_max:
+            # print("Entering case 1")
+            if capture_time < t_attacker:
+                y_at_catch = yA - self.vA * capture_time
+                distance_from_target = y_at_catch - self.geo.target_y
+                return -distance_from_target # Payoff = negative of how close attacker was to target when caught
         
-        if capture_time is not None and capture_time < t_attacker:
-            # Defender captures attacker before target
-            # Payoff = negative of how close attacker was to target when caught
-            y_at_catch = yA - self.vA * capture_time
-            distance_from_target = y_at_catch - self.geo.target_y
-            return -distance_from_target
-        else:
-            # Attacker reaches target
-            # Need to find distance between players at t = t_attacker
-            
+        # Case 2: No capture within time limit, but attacker reaches target within time
+        if t_attacker <= self.T_max:
+            # print("Entering case 2")
+            # Attacker reaches target within time limit
+            # Calculate final distance between players at at t = t_attacker
+
             # Attacker's position at target
             xA_target = xA
             yA_target = self.geo.target_y
@@ -109,18 +114,21 @@ class Phase3Solver:
                 # Defender can reach the target point exactly when attacker does
                 # But they might not be exactly at the same point
                 # Defender arrives at target point
-                final_distance = 0.0  # They meet at target
+                final_distance = 0.0 # They meet at target
             else:
                 # Defender moves as far as possible toward target
                 fraction = distance_defender_can_travel / distance_to_target
                 xD_final = xD + dx * fraction
                 yD_final = yD + dy * fraction
-                
                 # Distance at target time
                 final_distance = np.sqrt((xA_target - xD_final)**2 + 
-                                       (yA_target - yD_final)**2)
+                                    (yA_target - yD_final)**2)
             
-            return final_distance  # Positive = attacker wins
+            return final_distance # Positive = attacker wins
+        
+        # Case 3: Time runs out before anything decisive happens
+        # print("Entering case 3")
+        return 0.0  # DRAW
     
     def plot_payoff_slice(self, xA, yA):
         """
@@ -220,19 +228,23 @@ class Phase3Solver:
 if __name__ == "__main__":
     
     geo = GameGeometry(epsilon=0.5)  # Make sure epsilon is set
-    solver = Phase3Solver(geo, vA=1.0, vD=1.2)
+    solver = Phase3Solver(geo, vA=1.0, vD=1.2, T_max=2.0)
 
     print("PHASE 3 SOLVER TEST")
 
     # Test case 1: Defender close and slightly above attacker
+    print(f"Test Case 1")
     print(f"Attacker at (2.0, -2.0), Defender at (0.5, -1.0)")
     val1 = solver.payoff(2.0, -2.0, 0.5, -1.0)
     t_cap1, dist1 = solver.find_capture_time(2.0, -2.0, 0.5, -1.0)
     if val1 < 0:
         print(f"DEFENDER WINS: Catches attacker {-val1:.2f} units from target")
-        print(f"Capture at t={t_cap1:.2f}s, distance={dist1:.3f} (ε={geo.epsilon})")
-    else:
+        if t_cap1:
+            print(f"Capture at t={t_cap1:.2f}s, distance={dist1:.3f} (ε={geo.epsilon})")
+    elif val1 > 0:
         print(f"ATTACKER WINS: Reaches target with defender {val1:.2f} units away")
+    else:
+        print(f"DRAW: Game ends at T_max={solver.T_max}s before anyone wins")
     
     print("Plot 1: Attacker at (2.0, -2.0) - Payoff Map")
     fig1, ax1 = solver.plot_payoff_slice(2.0, -2.0)
@@ -243,6 +255,7 @@ if __name__ == "__main__":
     plt.show()
 
     # Test case 2: Defender far to the right and above
+    print(f"Test Case 2")
     print(f"Attacker at (2.0, -2.0), Defender at (3.0, -1.5)")
     val2 = solver.payoff(2.0, -2.0, 3.0, -1.5)
     t_cap2, dist2 = solver.find_capture_time(2.0, -2.0, 3.0, -1.5)
@@ -250,10 +263,13 @@ if __name__ == "__main__":
         print(f"DEFENDER WINS: Catches attacker {-val2:.2f} units from target")
         if t_cap2:
             print(f"Capture at t={t_cap2:.2f}s, distance={dist2:.3f}")
-    else:
+    elif val2 > 0:
         print(f"ATTACKER WINS: Reaches target with defender {val2:.2f} units away")
+    else:
+        print(f"DRAW: Game ends at T_max={solver.T_max}s before anyone wins")
 
     # Test case 3: Defender far to the right and below attacker (closer to target)
+    print(f"Test Case 3")
     print(f"Attacker at (2.0, -2.0), Defender at (3.0, -3.0)")
     val3 = solver.payoff(2.0, -2.0, 3.0, -3.0)
     t_cap3, dist3 = solver.find_capture_time(2.0, -2.0, 3.0, -3.0)
@@ -261,10 +277,13 @@ if __name__ == "__main__":
         print(f"DEFENDER WINS: Catches attacker {-val3:.2f} units from target")
         if t_cap3:
             print(f"Capture at t={t_cap3:.2f}s, distance={dist3:.3f}")
-    else:
+    elif val3 > 0:
         print(f"ATTACKER WINS: Reaches target with defender {val3:.2f} units away")
+    else:
+        print(f"DRAW: Game ends at T_max={solver.T_max}s before anyone wins")
 
     # Test case 4: Defender on opposite side
+    print(f"Test Case 4")
     print(f"Attacker at (2.0, -2.0), Defender at (-2.0, -1.5)")
     val4 = solver.payoff(2.0, -2.0, -2.0, -1.5)
     t_cap4, dist4 = solver.find_capture_time(2.0, -2.0, -2.0, -1.5)
@@ -272,10 +291,13 @@ if __name__ == "__main__":
         print(f"DEFENDER WINS: Catches attacker {-val4:.2f} units from target")
         if t_cap4:
             print(f"Capture at t={t_cap4:.2f}s, distance={dist4:.3f}")
-    else:
+    elif val4 > 0:
         print(f"ATTACKER WINS: Reaches target with defender {val4:.2f} units away")
+    else:
+        print(f"DRAW: Game ends at T_max={solver.T_max}s before anyone wins")
 
     # Test case 5: Defender with same x, far above
+    print(f"Test Case 5")
     print(f"Attacker at (2.0, -3.0), Defender at (2.0, -1.0)")
     val5 = solver.payoff(2.0, -3.0, 2.0, -1.0)
     t_cap5, dist5 = solver.find_capture_time(2.0, -3.0, 2.0, -1.0)
@@ -283,6 +305,8 @@ if __name__ == "__main__":
         print(f"DEFENDER WINS: Catches attacker {-val5:.2f} units from target")
         if t_cap5:
             print(f"Capture at t={t_cap5:.2f}s, distance={dist5:.3f}")
-    else:
+    elif val5 > 0:
         print(f"ATTACKER WINS: Reaches target with defender {val5:.2f} units away")
+    else:
+        print(f"DRAW: Game ends at T_max={solver.T_max}s before anyone wins")
         

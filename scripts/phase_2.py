@@ -7,11 +7,12 @@ from phase_3 import Phase3Solver
 class Phase2Solver:
     "Solution for Phase 2 (at the obstacle) - the decision at the obstacle"
     
-    def __init__(self, geometry: GameGeometry, vA: float, vD: float):
+    def __init__(self, geometry: GameGeometry, vA: float, vD: float, T_max: float):
         self.geo = geometry
         self.vA = vA
         self.vD = vD
-        self.phase3 = Phase3Solver(geometry, vA, vD)
+        self.T_max = T_max
+        self.phase3 = Phase3Solver(geometry, vA, vD, T_max)
         
         # Obstacle parameters
         self.obs_radius = geometry.obstacle_radius
@@ -51,24 +52,42 @@ class Phase2Solver:
                 if a_side == d_side:
                     # SAME SIDE
                     if t_D_clear < t_A_clear:
-                        # Defender arrives first
+                        # Defender arrives first at clearance point
                         wait_time = t_A_clear - t_D_clear
-                        # Defender can move up during wait
-                        y_defender_can_reach = D_clear[1] + self.vD * wait_time
-                        y_attacker_when_D_arrives = A_clear[1]
                         
-                        if y_defender_can_reach >= y_attacker_when_D_arrives:
-                            # Defender can reach attacker's height
-                            matrix[i, j] = -3.0  # Strong defender win
+                        # During wait time, defender can move UP toward attacker
+                        # Defender's position when attacker clears obstacle
+                        y_defender_when_A_clears = D_clear[1] + self.vD * wait_time
+                        
+                        # But defender can't go above obstacle bottom? Actually they can go up
+                        # Let's find where defender ends up after wait time
+                        if y_defender_when_A_clears >= A_clear[1]:
+                            # Defender can reach attacker's height - they meet!
+                            # Use Phase 3 with defender at same height as attacker
+                            matrix[i, j] = self.phase3.payoff(
+                                A_clear[0], A_clear[1],
+                                A_clear[0], A_clear[1]  # Defender at same point
+                            )
                         else:
-                            matrix[i, j] = -1.0  # Weak defender win
+                            # Defender is below attacker when Phase 3 starts
+                            # Use Phase 3 with defender at (D_clear[0], y_defender_when_A_clears)
+                            matrix[i, j] = self.phase3.payoff(
+                                A_clear[0], A_clear[1],
+                                D_clear[0], y_defender_when_A_clears
+                            )
                     else:
-                        # Attacker arrives first
+                        # Attacker arrives first at clearance point
                         head_start = t_D_clear - t_A_clear
-                        # Attacker moves down during head start
-                        # y_attacker_head_start = A_clear[1] - self.vA * head_start
-                        # Approximation - attacker advantage proportional to head start time
-                        matrix[i, j] = head_start * 2.0
+                        
+                        # Attacker has been moving down during head start
+                        y_attacker_when_D_arrives = A_clear[1] - self.vA * head_start
+                        
+                        # When defender arrives, attacker is already below
+                        # Use Phase 3 with attacker ahead
+                        matrix[i, j] = self.phase3.payoff(
+                            A_clear[0], y_attacker_when_D_arrives,
+                            D_clear[0], D_clear[1]
+                        )
                 else:
                     # DIFFERENT SIDES
                     # Defender goes to wrong side first
@@ -80,13 +99,31 @@ class Phase2Solver:
                     
                     t_D_total = t_D_wrong + t_D_switch
                     
+                    # Attacker's time to clear on their chosen side
+                    t_A_clear = self.time_to_reach(xA_start, correct_clear, self.vA)
+                    
                     if t_D_total < t_A_clear:
-                        # Defender still arrives first!
-                        matrix[i, j] = -2.0  # Defender wins
+                        # Defender arrives at correct side BEFORE attacker clears
+                        wait_time = t_A_clear - t_D_total
+                        
+                        # Defender can move up while waiting
+                        y_defender_when_A_clears = correct_clear[1] + self.vD * wait_time
+                        
+                        matrix[i, j] = self.phase3.payoff(
+                            correct_clear[0], correct_clear[1],
+                            correct_clear[0], y_defender_when_A_clears
+                        )
                     else:
-                        # Attacker gets head start
+                        # Attacker clears before defender arrives
                         head_start = t_D_total - t_A_clear
-                        matrix[i, j] = head_start * 2.0  # Attacker wins
+                        
+                        # Attacker moves down during head start
+                        y_attacker_when_D_arrives = correct_clear[1] - self.vA * head_start
+                        
+                        matrix[i, j] = self.phase3.payoff(
+                            correct_clear[0], y_attacker_when_D_arrives,
+                            correct_clear[0], correct_clear[1]
+                        )
         
         return matrix
     
@@ -152,7 +189,7 @@ class Phase2Solver:
         
         for ratio in speed_ratios:
             # Create solver with this speed ratio
-            solver = Phase2Solver(self.geo, vA_fixed, vA_fixed * ratio)
+            solver = Phase2Solver(self.geo, vA_fixed, vA_fixed * ratio, self.T_max)
             matrix = solver.build_payoff_matrix()
             p, q, V = solver.solve_nash_equilibrium(matrix)
             p_vals.append(p)
@@ -190,16 +227,27 @@ class Phase2Solver:
         print(f"{'Attacker L':<15} {matrix[0,0]:>+8.3f}     {matrix[0,1]:>+8.3f}")
         print(f"{'Attacker R':<15} {matrix[1,0]:>+8.3f}     {matrix[1,1]:>+8.3f}")
         print("-" * 40)
+        # Interpret each value
+        print("\nInterpretation:")
+        for i, a_side in enumerate(['L', 'R']):
+            for j, d_side in enumerate(['L', 'R']):
+                val = matrix[i, j]
+                if val < 0:
+                    print(f"  A={a_side}, D={d_side}: Defender catches attacker {abs(val):.2f} units above target")
+                elif val > 0:
+                    print(f"  A={a_side}, D={d_side}: Attacker reaches target with defender {val:.2f} units away")
+                else:
+                    print(f"  A={a_side}, D={d_side}: DRAW (time runs out)")
         print(f"\nNASH EQUILIBRIUM:")
         print(f"  Attacker goes LEFT with probability p = {p:.3f}")
         print(f"  Defender guards LEFT with probability q = {q:.3f}")
         print(f"  Value of game V = {V:.3f} ", end="")
         if V > 0:
-            print("(Attacker advantage)")
+            print(f"(Attacker advantage - reaches target with defender {V:.2f} units away)")
         elif V < 0:
-            print("(Defender advantage)")
+            print(f"(Defender advantage - catches attacker {abs(V):.2f} units above target)")
         else:
-            print("(Fair game)")
+            print(f"(Fair game - DRAW on average)")
 
 
 # Test Phase 2
@@ -209,15 +257,16 @@ if __name__ == "__main__":
     
     # Create geometry
     geo = GameGeometry(epsilon=0.5)
+    T_max = 2.0  # Maximum time before draw
     
     # Test different speed ratios
-    speed_ratios = [0.8, 1.0, 1.2, 1.5]
+    speed_ratios = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5]
     
     print("Testing different speed ratios")
     
     for ratio in speed_ratios:
         print(f"\nSpeed Ratio vD/vA = {ratio}")
-        solver = Phase2Solver(geo, vA=1.0, vD=1.0*ratio)
+        solver = Phase2Solver(geo, vA=1.0, vD=1.0*ratio, T_max=T_max)
         
         # Build payoff matrix (using default interface positions)
         matrix = solver.build_payoff_matrix(
@@ -234,8 +283,7 @@ if __name__ == "__main__":
     # Analyze across speed ratios
     print("Analyzing equilibrium vs speed ratio")
     
-    solver = Phase2Solver(geo, vA=1.0, vD=1.2)
+    solver = Phase2Solver(geo, vA=1.0, vD=1.2, T_max=T_max)
     fig, axes = solver.analyze_speed_ratio()
     plt.suptitle("Phase 2: Nash Equilibrium vs Speed Ratio")
     plt.show()
-    
